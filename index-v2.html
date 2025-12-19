@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="uk">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Pianestro - Професійна MIDI Piano Візуалізація">
+    <title>Pianestro - MIDI Piano Visualizer</title>
+    <link rel="stylesheet" href="style-v2.css">
+    <!-- MIDI Parser Library -->
+    <script src="https://unpkg.com/@tonejs/midi@2.0.28/build/Midi.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+</head>
+
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <!-- MIDI Status (Left) -->
+            <div class="header-status">
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text" id="statusText">Підключення...</span>
+                </div>
+            </div>
+
+            <!-- Logo (Center) -->
+            <div class="header-logo">
+                <h1>Pianestro</h1>
+            </div>
+
+            <!-- Avatar (Right) -->
+            <div class="header-avatar">
+                <div class="avatar-circle" id="userAvatar">
+                    <span class="avatar-icon">🎹</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Header Divider Line -->
+        <div class="header-divider"></div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Configuration Toolbar -->
+        <!-- Configuration Toolbar -->
+        <div class="config-toolbar">
+            <!-- Left Section: Mode, MIDI, Upload, Start -->
+            <div class="toolbar-section section-left">
+                <button class="action-btn mode-btn active" id="modeBtn">
+                    <span class="btn-label" id="modeLabel">Вільна гра</span>
+                </button>
+
+                <!-- MIDI File Upload -->
+                <div class="midi-upload-container" id="midiUploadContainer" style="display: none;">
+                    <label for="midiFileInput" class="action-btn upload-btn">
+                        <span class="btn-label">Завантажити MIDI</span>
+                    </label>
+                    <input type="file" id="midiFileInput" accept=".mid,.midi" style="display: none;">
+                    <span class="upload-status" id="uploadStatus">Очікування файлу...</span>
+                </div>
+
+                <button class="config-btn lesson-btn" id="lessonStartBtn" style="display: none;" disabled>
+                    <span class="btn-label"><svg width="20px" height="20px" viewBox="0 0 24 24" fill="none"
+                            xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M5 4.98951C5 4.01835 5 3.53277 5.20249 3.2651C5.37889 3.03191 5.64852 2.88761 5.9404 2.87018C6.27544 2.85017 6.67946 3.11953 7.48752 3.65823L18.0031 10.6686C18.6708 11.1137 19.0046 11.3363 19.1209 11.6168C19.2227 11.8621 19.2227 12.1377 19.1209 12.383C19.0046 12.6635 18.6708 12.886 18.0031 13.3312L7.48752 20.3415C6.67946 20.8802 6.27544 21.1496 5.9404 21.1296C5.64852 21.1122 5.37889 20.9679 5.20249 20.7347C5 20.467 5 19.9814 5 19.0103V4.98951Z"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg></span>
+                </button>
+            </div>
+
+            <!-- Center Section: Hands -->
+            <div class="toolbar-section section-center">
+                <button class="config-btn toggle-btn active" id="leftHandBtn">
+                    <span class="btn-icon"><svg width="26px" height="26px" viewBox="0 0 24 24" fill="none"
+                            xmlns="http://www.w3.org/2000/svg" transform="translate(0 0) scale(-1 1)">
+                            <path
+                                d="M6.9 11.4444V14.2222M6.9 11.4444V4.77778C6.9 3.8573 7.66112 3.11111 8.6 3.11111C9.53888 3.11111 10.3 3.8573 10.3 4.77778M6.9 11.4444C6.9 10.524 6.13888 9.77778 5.2 9.77778C4.26112 9.77778 3.5 10.524 3.5 11.4444V13.6667C3.5 18.269 7.30558 22 12 22C16.6944 22 20.5 18.269 20.5 13.6667V8.11111C20.5 7.19064 19.7389 6.44444 18.8 6.44444C17.8611 6.44444 17.1 7.19064 17.1 8.11111M10.3 4.77778V10.8889M10.3 4.77778V3.66667C10.3 2.74619 11.0611 2 12 2C12.9389 2 13.7 2.74619 13.7 3.66667V4.77778M13.7 4.77778V10.8889M13.7 4.77778C13.7 3.8573 14.4611 3.11111 15.4 3.11111C16.3389 3.11111 17.1 3.8573 17.1 4.77778V8.11111M17.1 8.11111V10.8889"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg></span>
+                </button>
+                <button class="config-btn toggle-btn active" id="rightHandBtn">
+                    <span class="btn-icon"><svg width="22px" height="22px" viewBox="0 0 24 24" fill="none"
+                            xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M6.9 11.4444V14.2222M6.9 11.4444V4.77778C6.9 3.8573 7.66112 3.11111 8.6 3.11111C9.53888 3.11111 10.3 3.8573 10.3 4.77778M6.9 11.4444C6.9 10.524 6.13888 9.77778 5.2 9.77778C4.26112 9.77778 3.5 10.524 3.5 11.4444V13.6667C3.5 18.269 7.30558 22 12 22C16.6944 22 20.5 18.269 20.5 13.6667V8.11111C20.5 7.19064 19.7389 6.44444 18.8 6.44444C17.8611 6.44444 17.1 7.19064 17.1 8.11111M10.3 4.77778V10.8889M10.3 4.77778V3.66667C10.3 2.74619 11.0611 2 12 2C12.9389 2 13.7 2.74619 13.7 3.66667V4.77778M13.7 4.77778V10.8889M13.7 4.77778C13.7 3.8573 14.4611 3.11111 15.4 3.11111C16.3389 3.11111 17.1 3.8573 17.1 4.77778V8.11111M17.1 8.11111V10.8889"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg></span>
+                </button>
+            </div>
+
+            <!-- Right Section: Reset -->
+            <div class="toolbar-section section-right">
+                <button class="config-btn reset-btn" id="resetBtn">
+                    <span class="btn-icon"><svg width="20px" height="20px" viewBox="0 0 24 24" fill="none"
+                            xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M2 14C2 14 2.12132 14.8492 5.63604 18.364C9.15076 21.8787 14.8492 21.8787 18.364 18.364C19.6092 17.1187 20.4133 15.5993 20.7762 14M2 14V20M2 14H8M22 10C22 10 21.8787 9.15076 18.364 5.63604C14.8492 2.12132 9.15076 2.12132 5.63604 5.63604C4.39076 6.88131 3.58669 8.40072 3.22383 10M22 10V4M22 10H16"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg></span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Piano Roll Visualization -->
+        <div class="piano-roll-wrapper">
+            <canvas id="pianoRollCanvas"></canvas>
+        </div>
+    </main>
+    <!-- Main Content -->
+    <main class="keyboard-content">
+        <!-- Piano Keyboard Visualization -->
+        <section class="piano-section">
+            <div class="piano-container">
+                <div class="piano-keyboard" id="pianoKeyboard">
+                    <!-- Piano keys will be generated by JavaScript -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="script-v2.js"></script>
+</body>
+
+</html>
