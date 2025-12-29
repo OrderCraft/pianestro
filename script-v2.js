@@ -34,6 +34,11 @@ let lessonDuration = 0;          // Total lesson duration in milliseconds
 let lessonName = "No lesson loaded";
 let lessonDescription = "";
 
+// Wait Logic Constants
+const CHORD_WINDOW_MS = 200;
+const HIT_LINE_Y_OFFSET = 40; // Pixels above the bottom of the canvas
+const PIXELS_PER_MS = 100 / 1000; // Scroll speed (100px per second)
+
 // Audio State
 let pianoSynth = null;
 let isAudioInitialized = false;
@@ -51,6 +56,9 @@ async function initAudio() {
     if (uploadStatus) uploadStatus.textContent = 'Завантаження звуків піаніно...';
 
     await Tone.start();
+    if (Tone.context.state !== 'running') {
+        await Tone.context.resume();
+    }
     console.log('🔊 Audio Context started');
 
     // Use Sampler with Salamander Grand Piano samples
@@ -351,6 +359,12 @@ function addNoteToRoll(midiNumber, velocity) {
 /**
  * Load and parse MIDI file for lesson
  */
+// Track Mapping Temporary State
+let tempMidiData = null;
+
+/**
+ * Load and parse MIDI file for lesson (Part 1: Parsing and UI)
+ */
 async function loadLessonFromMidi(file) {
     const uploadStatus = document.getElementById('uploadStatus');
     const lessonStartBtn = document.getElementById('lessonStartBtn');
@@ -369,100 +383,14 @@ async function loadLessonFromMidi(file) {
             throw new Error('MIDI файл не містить треків');
         }
 
-        // Extract all note events from all tracks
-        const PREPARATION_TIME_MS = 5000; // 5 seconds preparation
-        const COOLDOWN_TIME_MS = 3000;    // 3 seconds cooldown
+        // Store for later use in applyTrackMapping
+        tempMidiData = {
+            midi: midi,
+            fileName: file.name
+        };
 
-        // Extract all note events from all tracks to find the earliest start time
-        const rawNotes = [];
-
-        midi.tracks.forEach(track => {
-            // Determine hand from track name
-            let hand = null;
-            // track.name might be undefined in some cases
-            const trackName = (track.name || '').toLowerCase();
-
-            if (trackName.includes('left')) {
-                hand = 'left';
-            } else if (trackName.includes('right')) {
-                hand = 'right';
-            }
-
-            console.log(`Track: "${track.name}" -> Hand: ${hand}`);
-
-            track.notes.forEach(note => {
-                rawNotes.push({
-                    midi: note.midi,
-                    time: note.time,
-                    duration: note.duration,
-                    velocity: note.velocity,
-                    hand: hand // Store determined hand
-                });
-            });
-        });
-
-        if (rawNotes.length === 0) {
-            throw new Error('MIDI файл не містить нот');
-        }
-
-        // Find the start time of the very first note
-        // This allows us to "trim" silence at the beginning of the MIDI file
-        const minTime = Math.min(...rawNotes.map(n => n.time));
-
-        const allNoteEvents = [];
-
-        rawNotes.forEach(note => {
-            // Normalize time: subtract minTime so the first note starts at 0
-            // Then convert to milliseconds and add preparation time
-            const normalizedTime = note.time - minTime;
-            const timeMs = Math.round(normalizedTime * 1000) + PREPARATION_TIME_MS;
-            const durationMs = Math.round(note.duration * 1000);
-            const midiNote = note.midi;
-            const velocity = Math.round(note.velocity * 127);
-
-            // Add NoteOn event
-            allNoteEvents.push({
-                action: 'NoteOn',
-                note: midiNote,
-                timeMs: timeMs,
-                noteName: getNoteNameFromMidi(midiNote),
-                velocity: velocity,
-                durationMs: durationMs,
-                hand: note.hand // Pass hand property
-            });
-
-            // Add NoteOff event
-            allNoteEvents.push({
-                timeMs: timeMs + durationMs,
-                action: 'NoteOff',
-                note: midiNote,
-                noteName: getNoteNameFromMidi(midiNote)
-            });
-        });
-
-        // Sort events by time
-        allNoteEvents.sort((a, b) => a.timeMs - b.timeMs);
-
-        if (allNoteEvents.length === 0) {
-            throw new Error('MIDI файл не містить нот');
-        }
-
-        // Calculate lesson duration (last event time + cooldown)
-        const lastEventTime = allNoteEvents[allNoteEvents.length - 1].timeMs;
-        lessonDuration = lastEventTime + COOLDOWN_TIME_MS;
-
-        // Store lesson data
-        currentLessonEvents = allNoteEvents;
-        lessonName = file.name.replace(/\.mid$/i, '');
-        lessonDescription = `${midi.tracks.length} треків, ${allNoteEvents.filter(e => e.action === 'NoteOn').length} нот`;
-
-        // Update UI
-        uploadStatus.textContent = `✓ ${lessonName}`;
-        uploadStatus.classList.add('loaded');
-        lessonStartBtn.disabled = false;
-
-        console.log('✅ MIDI файл завантажено:', lessonName);
-        console.log(`📊 Події: ${allNoteEvents.length}, Тривалість: ${(lessonDuration / 1000).toFixed(1)}s`);
+        // Show UI for track mapping
+        showTrackMappingUI(midi.tracks);
 
     } catch (error) {
         console.error('❌ Помилка завантаження MIDI:', error);
@@ -472,6 +400,135 @@ async function loadLessonFromMidi(file) {
         currentLessonEvents = null;
         lessonDuration = 0;
     }
+}
+
+/**
+ * Show the Track Selection Modal
+ */
+function showTrackMappingUI(tracks) {
+    const modal = document.getElementById('trackMapperModal');
+    const tracksList = document.getElementById('tracksList');
+    tracksList.innerHTML = '';
+
+    tracks.forEach((track, index) => {
+        if (track.notes.length === 0) return;
+
+        const trackName = track.name || `Трек ${index + 1}`;
+        const noteCount = track.notes.length;
+
+        // Determine initial guess (optional)
+        let initialGuess = 'ignore';
+        const lowerName = trackName.toLowerCase();
+        if (lowerName.includes('left')) initialGuess = 'left';
+        else if (lowerName.includes('right')) initialGuess = 'right';
+        else if (index === 0 && tracks.length > 1) initialGuess = 'right';
+        else if (index === 1) initialGuess = 'left';
+
+        const trackItem = document.createElement('div');
+        trackItem.className = 'track-item';
+        trackItem.innerHTML = `
+            <div class="track-info-main">
+                <span class="track-name">${trackName}</span>
+                <span class="track-meta">${noteCount} нот</span>
+            </div>
+            <select class="track-hand-select" data-track-index="${index}">
+                <option value="right" ${initialGuess === 'right' ? 'selected' : ''}>Права рука</option>
+                <option value="left" ${initialGuess === 'left' ? 'selected' : ''}>Ліва рука</option>
+                <option value="ignore" ${initialGuess === 'ignore' ? 'selected' : ''}>Пропустити</option>
+            </select>
+        `;
+        tracksList.appendChild(trackItem);
+    });
+
+    modal.classList.add('active');
+}
+
+/**
+ * Apply the selected track mapping and build the final event list
+ */
+function applyTrackMapping() {
+    if (!tempMidiData) return;
+
+    const modal = document.getElementById('trackMapperModal');
+    const selects = modal.querySelectorAll('.track-hand-select');
+    const mapping = {};
+
+    selects.forEach(select => {
+        const trackIndex = parseInt(select.dataset.trackIndex);
+        mapping[trackIndex] = select.value;
+    });
+
+    const { midi, fileName } = tempMidiData;
+    const PREPARATION_TIME_MS = 5000;
+    const COOLDOWN_TIME_MS = 3000;
+    const rawNotes = [];
+
+    midi.tracks.forEach((track, index) => {
+        const assignedHand = mapping[index];
+        if (!assignedHand || assignedHand === 'ignore') return;
+
+        track.notes.forEach(note => {
+            rawNotes.push({
+                midi: note.midi,
+                time: note.time,
+                duration: note.duration,
+                velocity: note.velocity,
+                hand: assignedHand
+            });
+        });
+    });
+
+    if (rawNotes.length === 0) {
+        alert('Будь ласка, виберіть хоча б один трек для гри!');
+        return;
+    }
+
+    // Process notes (same as old logic but with mapped hands)
+    const minTime = Math.min(...rawNotes.map(n => n.time));
+    const allNoteEvents = [];
+
+    rawNotes.forEach(note => {
+        const normalizedTime = note.time - minTime;
+        const timeMs = Math.round(normalizedTime * 1000) + PREPARATION_TIME_MS;
+        const durationMs = Math.round(note.duration * 1000);
+        const midiNote = note.midi;
+        const velocity = Math.round(note.velocity * 127);
+
+        allNoteEvents.push({
+            action: 'NoteOn',
+            note: midiNote,
+            timeMs: timeMs,
+            noteName: getNoteNameFromMidi(midiNote),
+            velocity: velocity,
+            durationMs: durationMs,
+            hand: note.hand
+        });
+
+        allNoteEvents.push({
+            timeMs: timeMs + durationMs,
+            action: 'NoteOff',
+            note: midiNote,
+            noteName: getNoteNameFromMidi(midiNote)
+        });
+    });
+
+    allNoteEvents.sort((a, b) => a.timeMs - b.timeMs);
+
+    // Update global state
+    currentLessonEvents = allNoteEvents;
+    lessonName = fileName.replace(/\.mid$/i, '');
+    lessonDuration = allNoteEvents[allNoteEvents.length - 1].timeMs + COOLDOWN_TIME_MS;
+
+    // Update UI
+    const uploadStatus = document.getElementById('uploadStatus');
+    const lessonStartBtn = document.getElementById('lessonStartBtn');
+    uploadStatus.textContent = `✓ ${lessonName}`;
+    uploadStatus.classList.add('loaded');
+    lessonStartBtn.disabled = false;
+
+    // Close modal
+    modal.classList.remove('active');
+    console.log('✅ Треки налаштовано для урока:', lessonName);
 }
 
 /**
@@ -499,6 +556,38 @@ function drawPianoRollLanes() {
         pianoRollCtx.lineTo(x - getNoteWidth(i) / 2, height);
         pianoRollCtx.stroke();
     }
+
+    drawVisualGuides(width, height);
+}
+
+/**
+ * Draw visual guides (hit lines and chord window lines)
+ */
+function drawVisualGuides(width, height) {
+    const hitLineY = height - HIT_LINE_Y_OFFSET;
+    const windowLineY = hitLineY - (CHORD_WINDOW_MS * PIXELS_PER_MS);
+
+    pianoRollCtx.save();
+
+    // Draw Window Line (Start of 100ms window) - More subtle
+    pianoRollCtx.strokeStyle = 'rgba(15, 23, 42, 0.15)';
+    pianoRollCtx.lineWidth = 1;
+    pianoRollCtx.setLineDash([4, 4]);
+    pianoRollCtx.beginPath();
+    pianoRollCtx.moveTo(0, windowLineY);
+    pianoRollCtx.lineTo(width, windowLineY);
+    pianoRollCtx.stroke();
+
+    // Draw Hit Line (Pause execution) - More prominent
+    pianoRollCtx.strokeStyle = 'rgba(15, 23, 42, 0.4)';
+    pianoRollCtx.lineWidth = 2;
+    pianoRollCtx.setLineDash([8, 8]);
+    pianoRollCtx.beginPath();
+    pianoRollCtx.moveTo(0, hitLineY);
+    pianoRollCtx.lineTo(width, hitLineY);
+    pianoRollCtx.stroke();
+
+    pianoRollCtx.restore();
 }
 
 /**
@@ -520,15 +609,13 @@ function drawNotes() {
 
         currentLessonEvents.forEach((event, index) => {
             if (event.action === 'NoteOn') {
-                // Use stored duration
                 const duration = event.durationMs;
                 const timeUntilNote = event.timeMs - elapsedTime;
 
                 // Calculate Y position (notes come from top)
                 // noteY represents the Leading Edge (bottom of note block)
-                const pixelsPerMs = 100 / 1000;
-                const noteY = height - (timeUntilNote * pixelsPerMs);
-                const noteHeight = duration * pixelsPerMs;
+                const noteY = height - (timeUntilNote * PIXELS_PER_MS);
+                const noteHeight = duration * PIXELS_PER_MS;
 
                 // Determine Hand
                 let isLeftHand;
@@ -542,9 +629,11 @@ function drawNotes() {
                 }
                 const isHandActive = isLeftHand ? leftHandActive : rightHandActive;
 
-                // Check for pause: when Leading Edge reaches bottom (height)
+                // Check for pause: when Leading Edge reaches the HIT LINE
                 // We only check this for the current event to avoid multiple triggers
-                if (!lessonPaused && noteY >= height && index === currentEventIndex) {
+                const hitLineY = height - HIT_LINE_Y_OFFSET;
+
+                if (!lessonPaused && noteY >= hitLineY && index === currentEventIndex) {
                     if (isHandActive) {
                         // Hand is Active -> PAUSE and Wait
                         console.log('🛑 Pause Triggered by:', getNoteNameFromMidi(event.note));
@@ -552,34 +641,22 @@ function drawNotes() {
                         lessonPauseStartTime = Date.now();
                         waitingNotes.clear();
 
-                        // Identify Chakra/Chord Loop
-                        // Scan current and future notes to find all satisfying the chord window
+                        // Identify Chord Group
                         const baseTime = event.timeMs;
 
-                        // We iterate from the current index forward
                         for (let i = index; i < currentLessonEvents.length; i++) {
                             const chordNote = currentLessonEvents[i];
                             if (chordNote.action !== 'NoteOn') continue;
 
-                            // Check time window (50ms tolerance)
-                            if (Math.abs(chordNote.timeMs - baseTime) < 50) {
-                                // Check if this chord note belongs to an active hand
-                                let chordIsLeft;
-                                if (chordNote.hand === 'left') {
-                                    chordIsLeft = true;
-                                } else if (chordNote.hand === 'right') {
-                                    chordIsLeft = false;
-                                } else {
-                                    chordIsLeft = chordNote.note < SPLIT_POINT;
-                                }
-
+                            // Check time window (100ms tolerance)
+                            if (Math.abs(chordNote.timeMs - baseTime) < CHORD_WINDOW_MS) {
+                                let chordIsLeft = chordNote.hand ? (chordNote.hand === 'left') : (chordNote.note < SPLIT_POINT);
                                 if ((chordIsLeft && leftHandActive) || (!chordIsLeft && rightHandActive)) {
-                                    // Add to waiting set
                                     waitingNotes.add(chordNote.note);
                                     console.log(`   + Added to chord: ${getNoteNameFromMidi(chordNote.note)}`);
                                 }
                             } else {
-                                if (chordNote.timeMs > baseTime + 50) break;
+                                if (chordNote.timeMs > baseTime + CHORD_WINDOW_MS) break;
                             }
                         }
 
@@ -624,8 +701,8 @@ function drawNotes() {
                     let fillStyle, strokeStyle;
 
                     // Only pulse if it's the specific note waiting at the bottom
-                    // noteY is the bottom edge of the note. 'height' is the canvas bottom.
-                    const isAtHitLine = noteY >= height - 20;
+                    // noteY is the bottom edge of the note.
+                    const isAtHitLine = noteY >= (height - HIT_LINE_Y_OFFSET) - 10;
 
                     if (isLeftHand) {
                         // Left Hand - YELLOWS
@@ -822,7 +899,7 @@ function checkLessonProgress() {
         for (let i = currentEventIndex; i < currentLessonEvents.length; i++) {
             // Find the next group of notes that is LATER than current group
             // (Use tolerance to skip all notes in the current chord)
-            if (currentLessonEvents[i].timeMs > currentEventTime + 50) {
+            if (currentLessonEvents[i].timeMs > currentEventTime + CHORD_WINDOW_MS) {
                 // Find start of NEXT group
                 for (let j = i; j < currentLessonEvents.length; j++) {
                     if (currentLessonEvents[j].action === 'NoteOn') {
@@ -949,7 +1026,8 @@ function onMIDISuccess(midi) {
         startLoggingMIDIInput(input);
         updateMIDIStatus(`Підключено: ${input.name}`, 'success');
     } else {
-        updateMIDIStatus('Пристрій не знайдено', 'error');
+        updateMIDIStatus('Пристрій не знайдено. Перевірте кабель!', 'error');
+        console.log('🎹 MIDI API active, but 0 devices found.');
     }
 
     // Auto-select first output for playback
@@ -990,7 +1068,15 @@ function onMIDISuccess(midi) {
  */
 function onMIDIFailure(error) {
     console.error('❌ MIDI Access failed:', error);
-    updateMIDIStatus('Помилка доступу до MIDI', 'error');
+
+    let message = 'Помилка доступу до MIDI';
+    if (error && error.name === 'SecurityError') {
+        message = 'MIDI заблоковано (потрібен HTTPS)';
+    } else if (error && error.message) {
+        message = `MIDI: ${error.message}`;
+    }
+
+    updateMIDIStatus(message, 'error');
 }
 
 /**
@@ -1120,6 +1206,9 @@ function init() {
         }
     });
 
+    // Track Selection Confirm Button
+    document.getElementById('confirmMappingBtn').addEventListener('click', applyTrackMapping);
+
     // MIDI File Upload
     const midiFileInput = document.getElementById('midiFileInput');
     midiFileInput.addEventListener('change', (event) => {
@@ -1130,17 +1219,72 @@ function init() {
     });
 
     // Request MIDI access
-    if (navigator.requestMIDIAccess) {
-        updateMIDIStatus('Підключення...', 'loading');
+    const requestMIDI = async () => {
+        // Log environment for debugging
+        console.log('🌐 Environment:', {
+            isSecureContext: window.isSecureContext,
+            protocol: window.location.protocol,
+            hasRequestMIDIAccess: !!navigator.requestMIDIAccess
+        });
 
-        navigator.requestMIDIAccess()
-            .then(onMIDISuccess)
-            .catch(onMIDIFailure);
-    } else {
-        updateMIDIStatus('Web MIDI API не підтримується', 'error');
-        console.error('❌ Web MIDI API not supported');
-    }
+        // 1. Check for Secure Context (MANDATORY for Safari native MIDI)
+        if (!window.isSecureContext && window.location.protocol !== 'file:') {
+            console.warn('⚠️ Web MIDI API usually requires a Secure Context (HTTPS or localhost)');
+            updateMIDIStatus('MIDI потребує HTTPS', 'error');
+            // We continue anyway to let JZZ try its best, but warn
+        }
+
+        try {
+            updateMIDIStatus('Підключення...', 'loading');
+
+            // 2. Try JZZ Polyfill first (it's better for Safari/iOS)
+            if (typeof JZZ !== 'undefined') {
+                console.log('🎹 Initializing via JZZ...');
+                try {
+                    const midi = await JZZ().requestMIDIAccess();
+                    onMIDISuccess(midi);
+                    return;
+                } catch (jzzError) {
+                    console.warn('⚠️ JZZ request failed, falling back to native:', jzzError);
+                }
+            }
+
+            // 3. Fallback to Native API
+            if (navigator.requestMIDIAccess) {
+                console.log('🎹 Initializing via Native Web MIDI...');
+                const midi = await navigator.requestMIDIAccess();
+                onMIDISuccess(midi);
+            } else {
+                throw new Error('Web MIDI API не підтримується цим браузером');
+            }
+        } catch (error) {
+            onMIDIFailure(error);
+        }
+    };
+
+    // Trigger MIDI request
+    requestMIDI();
 }
+
+/**
+ * Global One-Time Audio Unlock for Safari/iOS
+ */
+function unlockAudio() {
+    if (isAudioInitialized) return;
+
+    // Resume context on first user tap
+    if (Tone.context.state !== 'running') {
+        Tone.context.resume();
+        console.log('🔊 Global Audio Unlock triggered');
+    }
+
+    // Remove the listener after first interaction
+    document.removeEventListener('click', unlockAudio);
+    document.removeEventListener('touchstart', unlockAudio);
+}
+
+document.addEventListener('click', unlockAudio);
+document.addEventListener('touchstart', unlockAudio);
 
 // Start application
 if (document.readyState === 'loading') {
